@@ -1,12 +1,18 @@
+/* Expose POSIX networking APIs such as getaddrinfo() in strict C modes. */
 #define _POSIX_C_SOURCE 200112L
 
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/select.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <netdb.h>
 #include <arpa/inet.h>
+#include <fcntl.h>
+#include <stdbool.h>
+#include <errno.h>
 
 const char* most_common[] = {
     "80","23","443","21","22","25","3389","110","445","139",
@@ -141,10 +147,17 @@ int main(int argc, char* argv[])
         return 1;
     }
 
+    #pragma omp parallel for
     for (int i = 0; i < 1000; i++) {
         int status = check_port(argv[1], most_common[i]);
-        if (status == 0) {
-            printf("Port Active : %s\n", most_common[i]);
+        #pragma omp critical
+        {
+            if (status == 0) {
+                printf("Port Active : %s\n", most_common[i]);
+            }
+            if (status == 1) {
+                printf("Port Filtered : %s\n", most_common[i]);
+            }
         }
     }
     return 0;
@@ -162,11 +175,29 @@ int check_port(const char* domain, const char* port)
     int sock_fd = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
     if (sock_fd == -1) {
         freeaddrinfo(result);
+        printf("Unable To Open A Socket \n");
         return 2;
     }
+    fcntl(sock_fd, F_SETFL, O_NONBLOCK);
+    connect(sock_fd, result->ai_addr, result->ai_addrlen);
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(sock_fd, &wfds);
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    int open = 2;
+    int ready = select(sock_fd + 1, NULL, &wfds, NULL, &tv);
 
-    int res = connect(sock_fd, result->ai_addr, result->ai_addrlen);
+    if (ready == 1) {
+        int err = 0;
+        socklen_t len = sizeof(err);
+        getsockopt(sock_fd, SOL_SOCKET, SO_ERROR, &err, &len);
+        if (err == 0) {
+            open = 0;
+        }
+    } else if (ready == 0) {
+        open = 1;
+    }
     close(sock_fd);
     freeaddrinfo(result);
-    return (res == 0) ? 0 : 1;
+    return open;
 }
