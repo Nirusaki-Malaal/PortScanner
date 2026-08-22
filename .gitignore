@@ -1,0 +1,16 @@
+# Binaries and build artifacts
+port_scanner
+*.o
+*.out
+
+# Editor and IDE configurations
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Temporary and test scripts
+hello.py
+
+# System files
+.DS_Store
