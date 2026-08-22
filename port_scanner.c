@@ -42,7 +42,7 @@ const char* most_common[] = {
     "1218","15000","3260","4444","264","2004","33","1042","42510",
     "3052","999","1023","1068","222","7100","888","563","1717",
     "2008","32770","992","32772","7001","2007","8082","5550",
-    "45","2009","512","5801","1700","2701","50001","7019",
+    "1043","2009","512","5801","1700","2701","50001","7019",
     "4662","2065","2010","42","161","2602","3333","9535","5100",
     "2604","4002","5002","1047","1051","1052","1055","1060",
     "1062","1311","16992","16993","20828","23502","2702","32769",
@@ -138,9 +138,19 @@ const char* most_common[] = {
     "1719","1721"
 };
 
-int check_port(const char* domain, const char* port);
+int check_port(const char* domain , const char* port, char* banner); //declaration
 
-int main(int argc, char* argv[])
+char* check_banner(char *banner) {
+    if(strstr(banner, "SSH") != NULL || strstr(banner, "ssh") != NULL) return "SSH";
+    if(strstr(banner, "220") != NULL && strstr(banner, "FTP") != NULL) return "FTP";
+    if(strstr(banner, "220") != NULL && strstr(banner, "SMTP") != NULL) return "SMTP";
+    if(strstr(banner, "220") != NULL) return "FTP/SMTP";  // ambiguous, could be either
+    if(strstr(banner, "MySQL") != NULL || strstr(banner, "mysql") != NULL) return "MySQL";
+    if(strstr(banner, "HTTP") != NULL) return "HTTP";
+    return "Unknown";
+}
+
+int main(int argc , char* argv[])
 {
     if (argc != 2) {
         fprintf(stderr, "Usage: %s <host>\n", argv[0]);
@@ -148,13 +158,15 @@ int main(int argc, char* argv[])
     }
 
     #pragma omp parallel for
-    for (int i = 0; i < 1000; i++) {
-        int status = check_port(argv[1], most_common[i]);
+    for(int i = 0; i < 1000 ; i++)
+     {
+        char banner[1000] = {0};
+        int status = check_port(argv[1], most_common[i], banner);
         #pragma omp critical
         {
-            if (status == 0) {
-                printf("Port Active : %s\n", most_common[i]);
-            }
+            if(status == 0) {
+                 printf("Port Open : %s | Service: %s\n", most_common[i], check_banner(banner));
+             }
             if (status == 1) {
                 printf("Port Filtered : %s\n", most_common[i]);
             }
@@ -163,38 +175,47 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-int check_port(const char* domain, const char* port)
+int check_port(const char* domain, const char* port,char* banner) //definiton
 {
     struct addrinfo hints, *result;
-    memset(&hints, 0, sizeof(hints));
+    memset(&hints, 0, sizeof(hints)); // settings hints to zero
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     int status = getaddrinfo(domain, port, &hints, &result);
-    if (status != 0) return 2;
+    if (status != 0 ) return 2;
 
     int sock_fd = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
-    if (sock_fd == -1) {
+    if (sock_fd == -1) 
+    {
         freeaddrinfo(result);
         printf("Unable To Open A Socket \n");
         return 2;
     }
-    fcntl(sock_fd, F_SETFL, O_NONBLOCK);
+    fcntl(sock_fd, F_SETFL, O_NONBLOCK); // use to manipulate descriptors, F_SETFL tells that the file descriptor is open , set it to non blocking (async)
     connect(sock_fd, result->ai_addr, result->ai_addrlen);
-    fd_set wfds;
-    FD_ZERO(&wfds);
+    fd_set wfds; //set of file_descriptors i want to watch
+    FD_ZERO(&wfds); //clears all the bits of this structure
     FD_SET(sock_fd, &wfds);
-    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 };
+    struct timeval tv = { .tv_sec = 1, .tv_usec = 0 }; // 1 second time structure
     int open = 2;
-    int ready = select(sock_fd + 1, NULL, &wfds, NULL, &tv);
-
-    if (ready == 1) {
+    int ready = select(sock_fd+1, NULL, &wfds, NULL, &tv);
+    
+    if(ready == 1 ){
         int err = 0;
         socklen_t len = sizeof(err);
-        getsockopt(sock_fd, SOL_SOCKET, SO_ERROR, &err, &len);
-        if (err == 0) {
-            open = 0;
+        getsockopt(sock_fd, SOL_SOCKET, SO_ERROR, &err, &len); // after one 1 seconds checks the status of the socket if writable returns true; else false;
+        if(err == 0) {
+            open = 0;  // open
+            fd_set rfds; // settings a read filte descriptor watcher
+            FD_ZERO(&rfds);
+            FD_SET(sock_fd, &rfds);
+            struct timeval btv = { .tv_sec = 2, .tv_usec = 0 }; // waitt for 2 seconds
+
+            if(select(sock_fd + 1, &rfds, NULL, NULL, &btv) == 1)
+                recv(sock_fd, banner, 999, 0);            
         }
-    } else if (ready == 0) {
+    }
+    else if (ready == 0) {
         open = 1;
     }
     close(sock_fd);
